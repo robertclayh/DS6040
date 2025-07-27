@@ -1,54 +1,46 @@
 data {
   int<lower=0> N;         // number of data points
-  int<lower=1> D;         // dimensionality of each data point
-  matrix[N, D] y;         // data matrix (each row is a data point)
+  int<lower=1> D;         // number of features
+  int<lower=1> H;         // number of clusters
+  matrix[N, D] y;         // data matrix
 }
 
 parameters {
-  simplex[3] lambda;        // mixture weights
-  array[3] vector[D] mu;    // a mean vector for each cluster
-  array[3] cov_matrix[D] Sigma;
+  simplex[H] lambda;                    // mixture weights
+  array[H] ordered[D] mu;              // ordered cluster means
+  array[H] vector<lower=0>[D] tau;     // per-cluster std deviations
+  array[H] cov_matrix[D] Sigma;        // full covariance matrix for each cluster
 }
 
 model {
-  array[3] real ps;
+  vector[H] log_ps;
 
-  // prior!
-  vector[3] alpha = rep_vector(1.0, 3); 
-  lambda ~ dirichlet(alpha);
-  for (k in 1:3) {
-    mu[k] ~ normal(0, 10);            
-    Sigma[k] ~ inv_wishart(D + 1, diag_matrix(rep_vector(1, D)));  
+  // Mixture weights
+  lambda ~ dirichlet(rep_vector(1.0, H));
+
+  for (h in 1:H) {
+    mu[h] ~ normal(0, 3);                         // Regularized prior on means
+    tau[h] ~ normal(0, 1);                        // Tighter prior than Cauchy
+    Sigma[h] ~ inv_wishart(D + 2, diag_matrix(rep_vector(1.0, D))); // weakly informative IW prior
   }
 
-  // observed-data likelihood
+  // Likelihood
   for (n in 1:N) {
-    for (k in 1:3) {
-      ps[k] = log(lambda[k]) + multi_normal_lpdf(y[n] | mu[k], Sigma[k]);
+    for (h in 1:H) {
+      log_ps[h] = log(lambda[h]) + multi_normal_lpdf(y[n] | mu[h], Sigma[h]);
     }
-    target += log_sum_exp(ps);
+    target += log_sum_exp(log_ps);
   }
 }
 
-
 generated quantities {
-  matrix[N, 3] label_prob;   // probabilities of each row's label
-  
+  matrix[N, H] label_prob;
+
   for (n in 1:N) {
-    array[3] real log_ps;
-    real max_log_ps;
-    
-    for (k in 1:3) {
-      log_ps[k] = log(lambda[k]) + multi_normal_lpdf(y[n] | mu[k], Sigma[k]); 
+    vector[H] log_ps;
+    for (h in 1:H) {
+      log_ps[h] = log(lambda[h]) + multi_normal_lpdf(y[n] | mu[h], Sigma[h]);
     }
-    
-    max_log_ps = max(log_ps);
-    
-    for (k in 1:3) {
-      label_prob[n, k] = exp(log_ps[k] - max_log_ps);
-    }
-    
-    // Normalize to get probabilities
-    label_prob[n] /= sum(label_prob[n]);
+    label_prob[n] = softmax(log_ps)';
   }
 }
